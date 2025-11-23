@@ -1,0 +1,61 @@
+{
+  "expo": {
+    "name": "TokTrip Planner",
+    "slug": "toktrip-planner",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.toktrip.planner",
+      "infoPlist": {
+        "NSPhotoLibraryUsageDescription": "This app needs access to your photo library to upload travel videos.",
+        "NSCameraUsageDescription": "This app needs access to your camera to capture travel videos.",
+        "CFBundleURLTypes": [
+          {
+            "CFBundleURLSchemes": ["toktrip"]
+          }
+        ]
+      },
+      "associatedDomains": ["applinks:toktrip.app"]
+    },
+    "android": {
+      "package": "com.toktrip.planner",
+      "permissions": [
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE"
+      ],
+      "intentFilters": [
+        {
+          "action": "SEND",
+          "category": ["DEFAULT"],
+          "data": [
+            {
+              "mimeType": "video/*"
+            },
+            {
+              "mimeType": "image/*"
+            }
+          ]
+        },
+        {
+          "action": "VIEW",
+          "data": [
+            {
+              "scheme": "toktrip"
+            }
+          ]
+        }
+      ]
+    },
+    "plugins": [
+      "expo-router"
+    ],
+    "scheme": "toktrip"
+  }
+}
+
+
