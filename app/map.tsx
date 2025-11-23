@@ -162,66 +162,95 @@ export default function MapScreen() {
 
   const renderPlaceItem = ({ item }: { item: Place }) => (
     <TouchableOpacity
-      style={styles.placeItem}
+      style={styles.placeCard}
       onPress={() => setSelectedPlace(selectedPlace?.id === item.id ? null : item)}
+      activeOpacity={0.7}
     >
-      <View style={styles.placeItemHeader}>
-        <Text style={styles.placeItemCategory}>
-          {getCategoryEmoji(item.category)} {item.category || 'Unknown'}
-        </Text>
-        {item.status === 'processing' && (
-          <ActivityIndicator size="small" color="#6366f1" />
-        )}
-        {item.status === 'failed' && (
-          <Text style={styles.statusBadge}>❌ Failed</Text>
-        )}
+      {/* Category Badge */}
+      <View style={[styles.categoryBadge, { backgroundColor: getCategoryColor(item.category) }]}>
+        <Text style={styles.categoryEmoji}>{getCategoryEmoji(item.category)}</Text>
+        <Text style={styles.categoryText}>{item.category || 'Unknown'}</Text>
       </View>
-      
-      <Text style={styles.placeItemName}>
+
+      {/* Status Indicators */}
+      {item.status === 'processing' && (
+        <View style={styles.processingBadge}>
+          <ActivityIndicator size="small" color="#6366f1" />
+          <Text style={styles.processingText}>Processing...</Text>
+        </View>
+      )}
+      {item.status === 'failed' && (
+        <View style={styles.failedBadge}>
+          <Text style={styles.failedText}>❌ Failed</Text>
+        </View>
+      )}
+
+      {/* Place Name */}
+      <Text style={styles.placeName}>
         {item.place_name || 'Processing...'}
       </Text>
-      
+
+      {/* Address */}
       {item.address_search_query && (
-        <Text style={styles.placeItemAddress} numberOfLines={1}>
-          📍 {item.address_search_query}
-        </Text>
+        <View style={styles.addressRow}>
+          <Text style={styles.addressPin}>📍</Text>
+          <Text style={styles.addressText} numberOfLines={2}>
+            {item.address_search_query}
+          </Text>
+        </View>
       )}
-      
+
+      {/* Vibe Keywords */}
       {item.vibe_keywords && item.vibe_keywords.length > 0 && (
-        <View style={styles.keywordsRow}>
+        <View style={styles.vibesContainer}>
           {item.vibe_keywords.slice(0, 3).map((keyword, index) => (
-            <View key={index} style={styles.keywordTag}>
-              <Text style={styles.keywordText}>{keyword}</Text>
+            <View key={index} style={styles.vibeTag}>
+              <Text style={styles.vibeText}>{keyword}</Text>
             </View>
           ))}
         </View>
       )}
-      
-      <Text style={styles.placeItemDate}>
-        {new Date(item.created_at).toLocaleDateString('en-US', {
-          month: 'short',
-          day: 'numeric',
-          year: 'numeric',
-        })}
-      </Text>
+
+      {/* Date */}
+      <View style={styles.dateRow}>
+        <Text style={styles.dateIcon}>🕒</Text>
+        <Text style={styles.dateText}>
+          {new Date(item.created_at).toLocaleDateString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+          })}
+        </Text>
+      </View>
     </TouchableOpacity>
   );
 
   return (
     <View style={styles.container}>
+      {/* Gradient Background */}
+      <View style={styles.gradientBg}>
+        <View style={[styles.circle, styles.circle1]} />
+        <View style={[styles.circle, styles.circle2]} />
+      </View>
+
+      {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>My Travel Places</Text>
-        <Text style={styles.headerSubtitle}>
-          {places.length} {places.length === 1 ? 'place' : 'places'} discovered
-        </Text>
+        <Text style={styles.headerEmoji}>📍</Text>
+        <Text style={styles.headerTitle}>My Places</Text>
+        <View style={styles.statsCard}>
+          <Text style={styles.statsNumber}>{places.length}</Text>
+          <Text style={styles.statsLabel}>
+            {places.length === 1 ? 'place' : 'places'} discovered
+          </Text>
+        </View>
       </View>
 
       {places.length === 0 ? (
         <View style={styles.emptyContainer}>
-          <Text style={styles.emptyIcon}>🗺️</Text>
-          <Text style={styles.emptyTitle}>No places yet!</Text>
+          <Text style={styles.emptyIcon}>✨</Text>
+          <Text style={styles.emptyTitle}>Start Your Journey</Text>
           <Text style={styles.emptyText}>
-            Upload your first travel video to get started.
+            Upload your first travel memory{'\n'}and watch the magic happen!
           </Text>
         </View>
       ) : (
@@ -230,10 +259,10 @@ export default function MapScreen() {
           renderItem={renderPlaceItem}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContainer}
+          showsVerticalScrollIndicator={false}
           refreshing={loading}
           onRefresh={() => {
             setLoading(true);
-            // The useEffect will re-fetch
             setTimeout(() => setLoading(false), 1000);
           }}
         />
@@ -245,119 +274,209 @@ export default function MapScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f8fafc',
+    backgroundColor: '#0f172a',
+  },
+  gradientBg: {
+    position: 'absolute',
+    width: '100%',
+    height: '100%',
+    overflow: 'hidden',
+  },
+  circle: {
+    position: 'absolute',
+    borderRadius: 500,
+    opacity: 0.15,
+  },
+  circle1: {
+    width: 350,
+    height: 350,
+    backgroundColor: '#10b981',
+    top: -100,
+    right: -80,
+  },
+  circle2: {
+    width: 300,
+    height: 300,
+    backgroundColor: '#6366f1',
+    bottom: 200,
+    left: -100,
   },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#f8fafc',
+    backgroundColor: '#0f172a',
   },
   loadingText: {
     marginTop: 16,
     fontSize: 16,
-    color: '#64748b',
+    color: '#cbd5e1',
   },
   header: {
-    backgroundColor: '#6366f1',
-    padding: 20,
     paddingTop: 60,
+    paddingHorizontal: 24,
     paddingBottom: 24,
+    alignItems: 'center',
+  },
+  headerEmoji: {
+    fontSize: 48,
+    marginBottom: 12,
   },
   headerTitle: {
-    fontSize: 28,
-    fontWeight: 'bold',
+    fontSize: 36,
+    fontWeight: '900',
     color: '#ffffff',
-    marginBottom: 4,
+    marginBottom: 16,
   },
-  headerSubtitle: {
-    fontSize: 14,
-    color: '#e0e7ff',
+  statsCard: {
+    backgroundColor: 'rgba(99, 102, 241, 0.2)',
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(99, 102, 241, 0.3)',
+    alignItems: 'center',
+  },
+  statsNumber: {
+    fontSize: 32,
+    fontWeight: '900',
+    color: '#6366f1',
+  },
+  statsLabel: {
+    fontSize: 13,
+    color: '#cbd5e1',
+    fontWeight: '600',
   },
   listContainer: {
-    padding: 16,
+    padding: 20,
     paddingBottom: 100,
   },
-  placeItem: {
-    backgroundColor: '#ffffff',
-    borderRadius: 16,
-    padding: 16,
+  placeCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: 24,
+    padding: 20,
     marginBottom: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 3,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    elevation: 6,
   },
-  placeItemHeader: {
+  categoryBadge: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 8,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+    marginBottom: 12,
   },
-  placeItemCategory: {
-    fontSize: 14,
-    fontWeight: '600',
+  categoryEmoji: {
+    fontSize: 16,
+    marginRight: 6,
+  },
+  categoryText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+  processingBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  processingText: {
+    fontSize: 13,
     color: '#6366f1',
+    marginLeft: 8,
+    fontWeight: '600',
   },
-  statusBadge: {
-    fontSize: 12,
+  failedBadge: {
+    marginBottom: 12,
+  },
+  failedText: {
+    fontSize: 13,
     color: '#ef4444',
+    fontWeight: '600',
   },
-  placeItemName: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#1e293b',
-    marginBottom: 6,
+  placeName: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#ffffff',
+    marginBottom: 12,
   },
-  placeItemAddress: {
+  addressRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 12,
+  },
+  addressPin: {
+    fontSize: 16,
+    marginRight: 8,
+    marginTop: 2,
+  },
+  addressText: {
+    flex: 1,
     fontSize: 14,
-    color: '#64748b',
-    marginBottom: 10,
+    color: '#cbd5e1',
+    lineHeight: 20,
   },
-  keywordsRow: {
+  vibesContainer: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 6,
-    marginBottom: 10,
+    gap: 8,
+    marginBottom: 12,
   },
-  placeItemDate: {
-    fontSize: 12,
-    color: '#94a3b8',
-  },
-  keywordTag: {
-    backgroundColor: '#eff6ff',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
+  vibeTag: {
+    backgroundColor: 'rgba(99, 102, 241, 0.2)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
     borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(99, 102, 241, 0.3)',
   },
-  keywordText: {
-    fontSize: 11,
-    color: '#6366f1',
+  vibeText: {
+    fontSize: 12,
+    color: '#a5b4fc',
+    fontWeight: '600',
+  },
+  dateRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  dateIcon: {
+    fontSize: 14,
+    marginRight: 6,
+  },
+  dateText: {
+    fontSize: 13,
+    color: '#94a3b8',
     fontWeight: '500',
   },
   emptyContainer: {
-    position: 'absolute',
-    top: '40%',
-    left: 0,
-    right: 0,
+    flex: 1,
+    justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 40,
   },
   emptyIcon: {
-    fontSize: 64,
-    marginBottom: 16,
+    fontSize: 80,
+    marginBottom: 20,
   },
   emptyTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#1e293b',
-    marginBottom: 8,
+    fontSize: 28,
+    fontWeight: '900',
+    color: '#ffffff',
+    marginBottom: 12,
+    textAlign: 'center',
   },
   emptyText: {
     fontSize: 16,
-    color: '#64748b',
+    color: '#cbd5e1',
     textAlign: 'center',
+    lineHeight: 24,
   },
 });
 

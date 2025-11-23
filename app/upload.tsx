@@ -23,17 +23,22 @@ import { supabase } from '../src/config/supabase';
 import { VideoUpload } from '../src/types';
 import { useSharedContent } from './share-handler';
 
+interface MediaItem {
+  uri: string;
+  type: 'image' | 'video';
+}
+
 export default function UploadScreen() {
-  const [selectedMedia, setSelectedMedia] = useState<string | null>(null);
-  const [mediaType, setMediaType] = useState<'image' | 'video'>('video');
+  const [selectedMedia, setSelectedMedia] = useState<MediaItem[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [currentUploadIndex, setCurrentUploadIndex] = useState(0);
 
   // Handle shared content from other apps
   useSharedContent((uri, type) => {
     console.log('Received shared content:', uri, type);
-    setSelectedMedia(uri);
-    setMediaType(type);
+    const newMedia: MediaItem = { uri, type };
+    setSelectedMedia([newMedia]);
     
     // Show alert asking if user wants to auto-upload
     Alert.alert(
@@ -67,8 +72,11 @@ export default function UploadScreen() {
         const type = params.get('type') as 'image' | 'video' | null;
         
         if (contentUri && type) {
-          setSelectedMedia(decodeURIComponent(contentUri));
-          setMediaType(type);
+          const newMedia: MediaItem = { 
+            uri: decodeURIComponent(contentUri), 
+            type 
+          };
+          setSelectedMedia([newMedia]);
         }
       }
     };
@@ -88,7 +96,7 @@ export default function UploadScreen() {
     };
   }, []);
 
-  const pickMedia = async () => {
+  const pickMedia = async (allowMultiple: boolean = true) => {
     try {
       // Request permissions
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -101,18 +109,21 @@ export default function UploadScreen() {
         return;
       }
 
-      // Launch image picker for photos and videos
+      // Launch image picker
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.All, // Accept both images and videos
-        allowsEditing: true,
+        mediaTypes: ImagePicker.MediaTypeOptions.All,
+        allowsMultipleSelection: allowMultiple,
         quality: 1,
-        videoMaxDuration: 60, // 60 seconds max for videos
+        videoMaxDuration: 60,
       });
 
-      if (!result.canceled && result.assets[0]) {
-        const asset = result.assets[0];
-        setSelectedMedia(asset.uri);
-        setMediaType(asset.type || 'video');
+      if (!result.canceled && result.assets.length > 0) {
+        const mediaItems: MediaItem[] = result.assets.map(asset => ({
+          uri: asset.uri,
+          type: (asset.type === 'video' ? 'video' : 'image') as 'image' | 'video'
+        }));
+        
+        setSelectedMedia(mediaItems);
       }
     } catch (error) {
       console.error('Error picking media:', error);
@@ -121,306 +132,616 @@ export default function UploadScreen() {
   };
 
   const uploadMedia = async () => {
-    if (!selectedMedia) {
-      Alert.alert('No Media', 'Please select a photo or video first.');
+    if (selectedMedia.length === 0) {
+      Alert.alert('No Media', 'Please select photos or videos first.');
       return;
     }
 
-    // For MVP, we'll use a demo user ID
-    // In production, implement proper authentication with Supabase Auth
     const userId = 'demo-user';
-    const timestamp = Date.now();
-    
-    // Determine file extension and content type
-    const fileExt = mediaType === 'image' ? 'jpg' : 'mp4';
-    const contentType = mediaType === 'image' ? 'image/jpeg' : 'video/mp4';
-    const fileName = `${timestamp}.${fileExt}`;
-    const storagePath = `uploads/${userId}/${fileName}`;
-
     setUploading(true);
-    setUploadProgress(0);
+    setCurrentUploadIndex(0);
 
     try {
-      // Fetch the media file
-      const response = await fetch(selectedMedia);
-      const arrayBuffer = await response.arrayBuffer();
-      
-      // Convert to base64 for Supabase
-      const base64Data = btoa(
-        new Uint8Array(arrayBuffer).reduce(
-          (data, byte) => data + String.fromCharCode(byte),
-          ''
-        )
-      );
+      const totalFiles = selectedMedia.length;
+      let successCount = 0;
 
-      // Upload to Supabase Storage
-      const { data, error: uploadError } = await supabase.storage
-        .from('videos')
-        .upload(storagePath, decode(base64Data), {
-          contentType: contentType,
-          upsert: false,
-        });
+      for (let i = 0; i < selectedMedia.length; i++) {
+        const media = selectedMedia[i];
+        setCurrentUploadIndex(i + 1);
+        
+        const timestamp = Date.now() + i; // Unique timestamp for each
+        const fileExt = media.type === 'image' ? 'jpg' : 'mp4';
+        const contentType = media.type === 'image' ? 'image/jpeg' : 'video/mp4';
+        const fileName = `${timestamp}.${fileExt}`;
+        const storagePath = `uploads/${userId}/${fileName}`;
 
-      if (uploadError) {
-        throw uploadError;
+        try {
+          // Update progress for this file
+          const baseProgress = (i / totalFiles) * 100;
+          setUploadProgress(baseProgress);
+
+          // Fetch the media file
+          const response = await fetch(media.uri);
+          const arrayBuffer = await response.arrayBuffer();
+          
+          // Convert to base64
+          const base64Data = btoa(
+            new Uint8Array(arrayBuffer).reduce(
+              (data, byte) => data + String.fromCharCode(byte),
+              ''
+            )
+          );
+
+          // Upload to Supabase Storage
+          const { data, error: uploadError } = await supabase.storage
+            .from('videos')
+            .upload(storagePath, decode(base64Data), {
+              contentType: contentType,
+              upsert: false,
+            });
+
+          if (uploadError) {
+            console.error(`Error uploading file ${i + 1}:`, uploadError);
+            continue;
+          }
+
+          // Get public URL
+          const { data: urlData } = supabase.storage
+            .from('videos')
+            .getPublicUrl(storagePath);
+
+          const mediaUrl = urlData.publicUrl;
+
+          // Create database record
+          const { error: dbError } = await supabase
+            .from('places')
+            .insert({
+              user_id: userId,
+              video_url: mediaUrl,
+              video_path: storagePath,
+              status: 'processing',
+            });
+
+          if (!dbError) {
+            successCount++;
+          }
+
+          // Update progress
+          const fileProgress = ((i + 1) / totalFiles) * 100;
+          setUploadProgress(fileProgress);
+
+        } catch (fileError) {
+          console.error(`Error processing file ${i + 1}:`, fileError);
+        }
       }
-
-      // Get public URL
-      const { data: urlData } = supabase.storage
-        .from('videos')
-        .getPublicUrl(storagePath);
-
-      const mediaUrl = urlData.publicUrl;
-
-      console.log(`${mediaType === 'image' ? 'Photo' : 'Video'} uploaded to Supabase:`, mediaUrl);
-
-      // Create database record to trigger processing
-      const { data: placeData, error: dbError } = await supabase
-        .from('places')
-        .insert({
-          user_id: userId,
-          video_url: mediaUrl,
-          video_path: storagePath,
-          status: 'processing',
-        })
-        .select()
-        .single();
-
-      if (dbError) {
-        throw dbError;
-      }
-
-      console.log('Place record created:', placeData.id);
 
       setUploadProgress(100);
       setUploading(false);
       
       Alert.alert(
-        'Upload Successful! 🎉',
-        `Your ${mediaType} is being processed. Check the map in a few moments to see your location!`,
+        'Upload Complete! 🎉',
+        `Successfully uploaded ${successCount} of ${totalFiles} ${totalFiles === 1 ? 'file' : 'files'}. AI is processing them now!`,
         [
           {
             text: 'OK',
             onPress: () => {
-              setSelectedMedia(null);
+              setSelectedMedia([]);
+              setCurrentUploadIndex(0);
             },
           },
         ]
       );
     } catch (error: any) {
-      console.error(`Error uploading ${mediaType}:`, error);
+      console.error('Error uploading media:', error);
       setUploading(false);
-      Alert.alert('Error', error.message || `Failed to upload ${mediaType}. Please try again.`);
+      Alert.alert('Error', error.message || 'Failed to upload media. Please try again.');
     }
   };
 
+  const removeMedia = (index: number) => {
+    setSelectedMedia(prev => prev.filter((_, i) => i !== index));
+  };
+
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Upload Travel Photo/Video</Text>
-        <Text style={styles.description}>
-          Select a photo or video from your gallery. Our AI will automatically extract the
-          location and add it to your map! 🤖
-        </Text>
+    <View style={styles.container}>
+      {/* Gradient Background */}
+      <View style={styles.gradientBg}>
+        <View style={[styles.circle, styles.circle1]} />
+        <View style={[styles.circle, styles.circle2]} />
       </View>
 
-      {selectedMedia ? (
-        <View style={styles.videoContainer}>
-          {mediaType === 'video' ? (
-            <Video
-              source={{ uri: selectedMedia }}
-              style={styles.video}
-              useNativeControls
-              resizeMode="contain"
-              isLooping
-            />
-          ) : (
-            <Image
-              source={{ uri: selectedMedia }}
-              style={styles.video}
-              resizeMode="contain"
-            />
-          )}
-          
-          {!uploading && (
-            <TouchableOpacity
-              style={styles.changeButton}
-              onPress={pickMedia}
-            >
-              <Text style={styles.changeButtonText}>Change {mediaType === 'video' ? 'Video' : 'Photo'}</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      ) : (
-        <TouchableOpacity
-          style={styles.selectButton}
-          onPress={pickMedia}
-        >
-          <Text style={styles.selectButtonIcon}>📸🎬</Text>
-          <Text style={styles.selectButtonText}>Select Photo or Video</Text>
-        </TouchableOpacity>
-      )}
-
-      {uploading && (
-        <View style={styles.progressContainer}>
-          <ActivityIndicator size="large" color="#6366f1" />
-          <Text style={styles.progressText}>
-            Uploading: {uploadProgress.toFixed(0)}%
+      <ScrollView 
+        style={styles.scrollView} 
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.header}>
+          <Text style={styles.title}>Upload Your Memory</Text>
+          <Text style={styles.description}>
+            Share a travel photo or video and let AI discover the magic ✨
           </Text>
-          <View style={styles.progressBar}>
-            <View
-              style={[
-                styles.progressFill,
-                { width: `${uploadProgress}%` },
-              ]}
-            />
+        </View>
+
+        {selectedMedia.length > 0 ? (
+          <View style={styles.mediaCard}>
+            {/* Media Grid */}
+            <ScrollView 
+              horizontal 
+              showsHorizontalScrollIndicator={false}
+              style={styles.mediaScrollView}
+            >
+              {selectedMedia.map((media, index) => (
+                <View key={index} style={styles.mediaItemContainer}>
+                  <View style={styles.mediaPreview}>
+                    {media.type === 'video' ? (
+                      <Video
+                        source={{ uri: media.uri }}
+                        style={styles.mediaThumbnail}
+                        useNativeControls
+                        resizeMode="cover"
+                      />
+                    ) : (
+                      <Image
+                        source={{ uri: media.uri }}
+                        style={styles.mediaThumbnail}
+                        resizeMode="cover"
+                      />
+                    )}
+                  </View>
+                  
+                  {/* Remove button */}
+                  {!uploading && (
+                    <TouchableOpacity
+                      style={styles.removeButton}
+                      onPress={() => removeMedia(index)}
+                    >
+                      <Text style={styles.removeButtonText}>×</Text>
+                    </TouchableOpacity>
+                  )}
+                  
+                  {/* Type badge */}
+                  <View style={styles.typeBadge}>
+                    <Text style={styles.typeBadgeText}>
+                      {media.type === 'video' ? '🎬' : '📷'}
+                    </Text>
+                  </View>
+                </View>
+              ))}
+            </ScrollView>
+            
+            {/* Action buttons */}
+            {!uploading && (
+              <View style={styles.mediaActions}>
+                <TouchableOpacity
+                  style={styles.addMoreButton}
+                  onPress={() => pickMedia(true)}
+                >
+                  <Text style={styles.addMoreIcon}>+</Text>
+                  <Text style={styles.addMoreText}>Add More</Text>
+                </TouchableOpacity>
+                
+                <TouchableOpacity
+                  style={styles.clearButton}
+                  onPress={() => setSelectedMedia([])}
+                >
+                  <Text style={styles.clearText}>Clear All</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+            
+            {/* Count badge */}
+            <View style={styles.countBadge}>
+              <Text style={styles.countText}>
+                {selectedMedia.length} {selectedMedia.length === 1 ? 'file' : 'files'} selected
+              </Text>
+            </View>
+          </View>
+        ) : (
+          <TouchableOpacity
+            style={styles.selectCard}
+            onPress={() => pickMedia(true)}
+            activeOpacity={0.8}
+          >
+            <View style={styles.selectIconContainer}>
+              <Text style={styles.selectIcon}>📸</Text>
+              <Text style={styles.selectIconPlus}>+</Text>
+            </View>
+            <Text style={styles.selectTitle}>Choose Media</Text>
+            <Text style={styles.selectSubtitle}>Select multiple photos or videos</Text>
+          </TouchableOpacity>
+        )}
+
+        {uploading && (
+          <View style={styles.progressCard}>
+            <View style={styles.progressIconContainer}>
+              <ActivityIndicator size="large" color="#6366f1" />
+            </View>
+            <Text style={styles.progressTitle}>Uploading Magic ✨</Text>
+            <Text style={styles.progressCount}>
+              {currentUploadIndex} / {selectedMedia.length}
+            </Text>
+            <Text style={styles.progressText}>{uploadProgress.toFixed(0)}%</Text>
+            <View style={styles.progressBarContainer}>
+              <View
+                style={[
+                  styles.progressBar,
+                  { width: `${uploadProgress}%` },
+                ]}
+              />
+            </View>
+            <Text style={styles.progressSubtext}>
+              AI is analyzing your content...
+            </Text>
+          </View>
+        )}
+
+        {selectedMedia.length > 0 && !uploading && (
+          <TouchableOpacity
+            style={styles.uploadButton}
+            onPress={uploadMedia}
+            activeOpacity={0.9}
+          >
+            <Text style={styles.uploadButtonIcon}>🚀</Text>
+            <Text style={styles.uploadButtonText}>
+              Upload {selectedMedia.length} {selectedMedia.length === 1 ? 'File' : 'Files'}
+            </Text>
+          </TouchableOpacity>
+        )}
+
+        <View style={styles.tipsCard}>
+          <Text style={styles.tipsTitle}>✨ Pro Tips</Text>
+          <View style={styles.tipsList}>
+            <TipItem icon="📸" text="Photos & videos both work great" />
+            <TipItem icon="⏱️" text="Keep videos under 60 seconds" />
+            <TipItem icon="🏛️" text="Show clear landmarks for best results" />
+            <TipItem icon="🤖" text="AI processes in ~10-30 seconds" />
           </View>
         </View>
-      )}
+      </ScrollView>
+    </View>
+  );
+}
 
-      {selectedMedia && !uploading && (
-        <TouchableOpacity
-          style={styles.uploadButton}
-          onPress={uploadMedia}
-        >
-          <Text style={styles.uploadButtonText}>🚀 Upload {mediaType === 'video' ? 'Video' : 'Photo'}</Text>
-        </TouchableOpacity>
-      )}
-
-      <View style={styles.infoBox}>
-        <Text style={styles.infoTitle}>💡 Tips:</Text>
-        <Text style={styles.infoText}>• Photos or videos both work!</Text>
-        <Text style={styles.infoText}>• Keep videos under 60 seconds</Text>
-        <Text style={styles.infoText}>• Show landmarks or recognizable locations</Text>
-        <Text style={styles.infoText}>• Clear views get better results</Text>
-        <Text style={styles.infoText}>• Processing takes ~10-30 seconds</Text>
-      </View>
-    </ScrollView>
+function TipItem({ icon, text }: { icon: string; text: string }) {
+  return (
+    <View style={styles.tipItem}>
+      <Text style={styles.tipIcon}>{icon}</Text>
+      <Text style={styles.tipText}>{text}</Text>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f8fafc',
+    backgroundColor: '#0f172a',
+  },
+  gradientBg: {
+    position: 'absolute',
+    width: '100%',
+    height: '100%',
+    overflow: 'hidden',
+  },
+  circle: {
+    position: 'absolute',
+    borderRadius: 500,
+    opacity: 0.15,
+  },
+  circle1: {
+    width: 400,
+    height: 400,
+    backgroundColor: '#6366f1',
+    top: -150,
+    right: -100,
+  },
+  circle2: {
+    width: 300,
+    height: 300,
+    backgroundColor: '#ec4899',
+    bottom: 100,
+    left: -80,
+  },
+  scrollView: {
+    flex: 1,
   },
   content: {
-    padding: 20,
+    padding: 24,
+    paddingTop: 60,
+    paddingBottom: 40,
   },
   header: {
-    marginBottom: 24,
+    marginBottom: 32,
+    alignItems: 'center',
   },
   title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#1e293b',
+    fontSize: 32,
+    fontWeight: '900',
+    color: '#ffffff',
     marginBottom: 12,
+    textAlign: 'center',
   },
   description: {
     fontSize: 16,
-    color: '#64748b',
+    color: '#cbd5e1',
     lineHeight: 24,
+    textAlign: 'center',
+    paddingHorizontal: 20,
   },
-  videoContainer: {
-    marginBottom: 20,
+  mediaCard: {
+    marginBottom: 24,
   },
-  video: {
-    width: '100%',
-    height: 300,
-    backgroundColor: '#000',
-    borderRadius: 12,
-  },
-  changeButton: {
-    marginTop: 12,
-    padding: 12,
-    backgroundColor: '#e2e8f0',
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  changeButtonText: {
-    color: '#475569',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  selectButton: {
-    padding: 60,
-    backgroundColor: '#ffffff',
-    borderRadius: 16,
-    alignItems: 'center',
-    borderWidth: 2,
-    borderColor: '#e2e8f0',
-    borderStyle: 'dashed',
-    marginBottom: 20,
-  },
-  selectButtonIcon: {
-    fontSize: 64,
+  mediaScrollView: {
     marginBottom: 16,
   },
-  selectButtonText: {
-    fontSize: 18,
-    color: '#6366f1',
-    fontWeight: '600',
+  mediaItemContainer: {
+    marginRight: 12,
+    position: 'relative',
   },
-  progressContainer: {
-    padding: 20,
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  progressText: {
-    fontSize: 16,
-    color: '#475569',
-    marginTop: 12,
-    marginBottom: 8,
-    fontWeight: '600',
-  },
-  progressBar: {
-    width: '100%',
-    height: 8,
-    backgroundColor: '#e2e8f0',
-    borderRadius: 4,
+  mediaPreview: {
+    borderRadius: 20,
     overflow: 'hidden',
+    backgroundColor: '#1e293b',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.3,
+    shadowRadius: 16,
+    elevation: 8,
   },
-  progressFill: {
-    height: '100%',
-    backgroundColor: '#6366f1',
+  mediaThumbnail: {
+    width: 200,
+    height: 280,
   },
-  uploadButton: {
-    padding: 20,
-    backgroundColor: '#6366f1',
-    borderRadius: 12,
+  removeButton: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(239, 68, 68, 0.9)',
+    justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 20,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
     elevation: 4,
+  },
+  removeButtonText: {
+    color: '#ffffff',
+    fontSize: 24,
+    fontWeight: 'bold',
+    lineHeight: 24,
+  },
+  typeBadge: {
+    position: 'absolute',
+    bottom: 8,
+    left: 8,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  typeBadgeText: {
+    fontSize: 16,
+  },
+  mediaActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 12,
+  },
+  addMoreButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 14,
+    backgroundColor: 'rgba(99, 102, 241, 0.2)',
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: 'rgba(99, 102, 241, 0.4)',
+    borderStyle: 'dashed',
+  },
+  addMoreIcon: {
+    fontSize: 24,
+    marginRight: 8,
+    color: '#6366f1',
+  },
+  addMoreText: {
+    color: '#6366f1',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  clearButton: {
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.3)',
+    justifyContent: 'center',
+  },
+  clearText: {
+    color: '#ef4444',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  countBadge: {
+    backgroundColor: 'rgba(99, 102, 241, 0.2)',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 16,
+    alignSelf: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(99, 102, 241, 0.3)',
+  },
+  countText: {
+    color: '#a5b4fc',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  changeButton: {
+    marginTop: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 14,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  changeButtonIcon: {
+    fontSize: 20,
+    marginRight: 8,
+  },
+  changeButtonText: {
+    color: '#e2e8f0',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  selectCard: {
+    padding: 60,
+    backgroundColor: 'rgba(99, 102, 241, 0.15)',
+    borderRadius: 32,
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: 'rgba(99, 102, 241, 0.3)',
+    borderStyle: 'dashed',
+    marginBottom: 24,
+  },
+  selectIconContainer: {
+    position: 'relative',
+    marginBottom: 20,
+  },
+  selectIcon: {
+    fontSize: 80,
+  },
+  selectIconPlus: {
+    position: 'absolute',
+    fontSize: 32,
+    bottom: -10,
+    right: -10,
+    backgroundColor: '#6366f1',
+    borderRadius: 20,
+    width: 40,
+    height: 40,
+    textAlign: 'center',
+    lineHeight: 40,
+    color: '#ffffff',
+    fontWeight: 'bold',
+  },
+  selectTitle: {
+    fontSize: 24,
+    color: '#ffffff',
+    fontWeight: '800',
+    marginBottom: 6,
+  },
+  selectSubtitle: {
+    fontSize: 15,
+    color: '#cbd5e1',
+    fontWeight: '500',
+  },
+  progressCard: {
+    padding: 32,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: 24,
+    alignItems: 'center',
+    marginBottom: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  progressIconContainer: {
+    marginBottom: 20,
+  },
+  progressTitle: {
+    fontSize: 22,
+    color: '#ffffff',
+    fontWeight: '800',
+    marginBottom: 8,
+  },
+  progressCount: {
+    fontSize: 16,
+    color: '#cbd5e1',
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  progressText: {
+    fontSize: 40,
+    color: '#6366f1',
+    fontWeight: '900',
+    marginBottom: 16,
+  },
+  progressBarContainer: {
+    width: '100%',
+    height: 12,
+    backgroundColor: 'rgba(99, 102, 241, 0.2)',
+    borderRadius: 6,
+    overflow: 'hidden',
+    marginBottom: 12,
+  },
+  progressBar: {
+    height: '100%',
+    backgroundColor: '#6366f1',
+    borderRadius: 6,
+  },
+  progressSubtext: {
+    fontSize: 14,
+    color: '#94a3b8',
+  },
+  uploadButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 20,
+    backgroundColor: '#6366f1',
+    borderRadius: 20,
+    marginBottom: 24,
+    shadowColor: '#6366f1',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.4,
+    shadowRadius: 16,
+    elevation: 8,
+  },
+  uploadButtonIcon: {
+    fontSize: 24,
+    marginRight: 10,
   },
   uploadButtonText: {
     color: '#ffffff',
-    fontSize: 18,
-    fontWeight: 'bold',
+    fontSize: 20,
+    fontWeight: '800',
   },
-  infoBox: {
-    padding: 20,
-    backgroundColor: '#eff6ff',
-    borderRadius: 12,
-    borderLeftWidth: 4,
-    borderLeftColor: '#6366f1',
+  tipsCard: {
+    padding: 24,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
   },
-  infoTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#1e293b',
-    marginBottom: 8,
+  tipsTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#ffffff',
+    marginBottom: 16,
   },
-  infoText: {
-    fontSize: 14,
-    color: '#475569',
-    marginBottom: 4,
-    lineHeight: 20,
+  tipsList: {
+    gap: 12,
+  },
+  tipItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  tipIcon: {
+    fontSize: 20,
+    marginRight: 12,
+    width: 32,
+  },
+  tipText: {
+    fontSize: 15,
+    color: '#cbd5e1',
+    lineHeight: 22,
+    flex: 1,
   },
 });
 
