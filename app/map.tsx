@@ -12,7 +12,10 @@ import {
   TouchableOpacity,
   Dimensions,
   FlatList,
+  Alert,
+  Share,
 } from 'react-native';
+import * as Linking from 'expo-linking';
 import { supabase, Place } from '../src/config/supabase';
 
 const { width } = Dimensions.get('window');
@@ -151,6 +154,163 @@ export default function MapScreen() {
     }
   };
 
+  // Open single place in Google Maps
+  const openInGoogleMaps = async (place: Place) => {
+    // Build search query: place name + address for best Google Maps results
+    const searchParts = [
+      place.place_name,
+      place.address_search_query,
+    ].filter(Boolean);
+    
+    if (searchParts.length === 0) {
+      Alert.alert('Error', 'No location data available for this place');
+      return;
+    }
+    
+    const searchQuery = searchParts.join(', ');
+    const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(searchQuery)}`;
+
+    const canOpen = await Linking.canOpenURL(url);
+    if (canOpen) {
+      await Linking.openURL(url);
+    } else {
+      Alert.alert('Error', 'Unable to open Google Maps');
+    }
+  };
+
+  // Show export options menu
+  const showExportOptions = () => {
+    const validPlaces = places.filter(p => p.latitude && p.longitude && p.place_name);
+    
+    if (validPlaces.length === 0) {
+      Alert.alert(
+        'No Places to Export',
+        'You need places with coordinates to export. Make sure your places have been processed successfully.'
+      );
+      return;
+    }
+
+    Alert.alert(
+      '📤 Export Places',
+      `Export ${validPlaces.length} places to Google Maps`,
+      [
+        {
+          text: '📋 Copy as Text List',
+          onPress: () => shareAsTextList(validPlaces),
+        },
+        {
+          text: '🔗 Copy Google Maps Links',
+          onPress: () => shareAsLinks(validPlaces),
+        },
+        {
+          text: '🗺️ Open All as Route',
+          onPress: () => shareAsGoogleMapsLink(),
+        },
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+      ]
+    );
+  };
+
+  // Share as a simple text list (easiest to copy/use)
+  const shareAsTextList = async (placesToShare: Place[]) => {
+    const textList = placesToShare.map((place, index) => {
+      const lines = [
+        `${index + 1}. ${place.place_name}`,
+        `   📍 ${place.address_search_query || 'No address'}`,
+        `   🏷️ ${place.category || 'Uncategorized'}`,
+      ];
+      if (place.latitude && place.longitude) {
+        lines.push(`   🌐 ${place.latitude.toFixed(6)}, ${place.longitude.toFixed(6)}`);
+      }
+      return lines.join('\n');
+    }).join('\n\n');
+
+    const message = `🗺️ My TokTrip Places\n${'─'.repeat(20)}\n\n${textList}\n\n${'─'.repeat(20)}\nExported from TokTrip Planner`;
+
+    try {
+      await Share.share({
+        title: 'My TokTrip Places',
+        message: message,
+      });
+    } catch (error) {
+      console.error('Share error:', error);
+    }
+  };
+
+  // Share as Google Maps links (can open each to save to list)
+  const shareAsLinks = async (placesToShare: Place[]) => {
+    const links = placesToShare.map((place, index) => {
+      // Build search query: place name + address for best Google Maps results
+      const searchParts = [
+        place.place_name,
+        place.address_search_query,
+      ].filter(Boolean);
+      
+      const searchQuery = searchParts.join(', ');
+      const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(searchQuery)}`;
+      
+      return `${index + 1}. ${place.place_name}\n   ${url}`;
+    }).join('\n\n');
+
+    const message = `🗺️ My TokTrip Places (Google Maps Links)\n${'─'.repeat(30)}\n\n${links}\n\n${'─'.repeat(30)}\n💡 Tip: Open each link in Google Maps, then tap "Save" to add to your list!`;
+
+    try {
+      await Share.share({
+        title: 'My TokTrip Places - Google Maps Links',
+        message: message,
+      });
+    } catch (error) {
+      console.error('Share error:', error);
+    }
+  };
+
+  // Generate a shareable Google Maps list link
+  // Helper to build search query for a place
+  const buildSearchQuery = (place: Place): string => {
+    const parts = [place.place_name, place.address_search_query].filter(Boolean);
+    return parts.join(', ');
+  };
+
+  const shareAsGoogleMapsLink = async () => {
+    const validPlaces = places.filter(p => p.place_name);
+    
+    if (validPlaces.length === 0) {
+      Alert.alert('No Places', 'No places to share.');
+      return;
+    }
+
+    // Create a multi-destination Google Maps URL (up to 10 waypoints)
+    const destinations = validPlaces.slice(0, 10);
+    
+    if (destinations.length === 1) {
+      // Single place - open directly
+      await openInGoogleMaps(destinations[0]);
+      return;
+    }
+
+    // Build directions URL with multiple waypoints using place names
+    const origin = encodeURIComponent(buildSearchQuery(destinations[0]));
+    const destination = encodeURIComponent(buildSearchQuery(destinations[destinations.length - 1]));
+    const waypoints = destinations.slice(1, -1)
+      .map(p => buildSearchQuery(p))
+      .join('|');
+
+    let url = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}`;
+    if (waypoints) {
+      url += `&waypoints=${encodeURIComponent(waypoints)}`;
+    }
+
+    const canOpen = await Linking.canOpenURL(url);
+    if (canOpen) {
+      await Linking.openURL(url);
+    } else {
+      Alert.alert('Error', 'Unable to open Google Maps');
+    }
+  };
+
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
@@ -222,6 +382,16 @@ export default function MapScreen() {
           })}
         </Text>
       </View>
+
+      {/* Google Maps Button */}
+      <TouchableOpacity
+        style={styles.googleMapsButton}
+        onPress={() => openInGoogleMaps(item)}
+        activeOpacity={0.8}
+      >
+        <Text style={styles.googleMapsIcon}>🗺️</Text>
+        <Text style={styles.googleMapsText}>Open in Google Maps</Text>
+      </TouchableOpacity>
     </TouchableOpacity>
   );
 
@@ -243,6 +413,29 @@ export default function MapScreen() {
             {places.length === 1 ? 'place' : 'places'} discovered
           </Text>
         </View>
+
+        {/* Google Maps Export Buttons */}
+        {places.length > 0 && (
+          <View style={styles.exportButtonsContainer}>
+            <TouchableOpacity
+              style={styles.exportButton}
+              onPress={showExportOptions}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.exportButtonIcon}>📤</Text>
+              <Text style={styles.exportButtonText}>Export</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.exportButton, styles.routeButton]}
+              onPress={shareAsGoogleMapsLink}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.exportButtonIcon}>🗺️</Text>
+              <Text style={styles.exportButtonText}>View Route</Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </View>
 
       {places.length === 0 ? (
@@ -477,6 +670,57 @@ const styles = StyleSheet.create({
     color: '#cbd5e1',
     textAlign: 'center',
     lineHeight: 24,
+  },
+  // Google Maps Button Styles
+  googleMapsButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(66, 133, 244, 0.2)',
+    borderWidth: 1,
+    borderColor: 'rgba(66, 133, 244, 0.4)',
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    marginTop: 16,
+  },
+  googleMapsIcon: {
+    fontSize: 18,
+    marginRight: 8,
+  },
+  googleMapsText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#60a5fa',
+  },
+  // Export Buttons Container
+  exportButtonsContainer: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 16,
+  },
+  exportButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(16, 185, 129, 0.2)',
+    borderWidth: 1,
+    borderColor: 'rgba(16, 185, 129, 0.4)',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+  },
+  routeButton: {
+    backgroundColor: 'rgba(66, 133, 244, 0.2)',
+    borderColor: 'rgba(66, 133, 244, 0.4)',
+  },
+  exportButtonIcon: {
+    fontSize: 16,
+    marginRight: 6,
+  },
+  exportButtonText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#ffffff',
   },
 });
 
