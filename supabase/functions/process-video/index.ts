@@ -22,7 +22,11 @@ interface GeminiResponse {
 }
 
 // Free geocoding using OpenStreetMap Nominatim with fallback
-async function geocodeAddress(address: string): Promise<{ lat: number, lng: number } | null> {
+// Nominatim rate limit: max 1 request per second, we use 2s to be safe
+const NOMINATIM_DELAY_MS = 2000;
+let lastNominatimRequest = 0;
+
+async function geocodeAddress(address: string, retryCount = 0): Promise<{ lat: number, lng: number } | null> {
   // Try progressively simpler queries if detailed address fails
   const addressVariations = generateAddressFallbacks(address);
   
@@ -31,8 +35,17 @@ async function geocodeAddress(address: string): Promise<{ lat: number, lng: numb
     console.log(`Attempt ${i + 1}/${addressVariations.length}: "${currentAddress}"`);
     
     try {
-      // Add delay to respect Nominatim rate limits (1 request per second)
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // Enforce rate limit: wait until 2 seconds since last request
+      const now = Date.now();
+      const timeSinceLastRequest = now - lastNominatimRequest;
+      const waitTime = Math.max(NOMINATIM_DELAY_MS - timeSinceLastRequest, 0);
+      
+      if (waitTime > 0) {
+        console.log(`⏳ Rate limit: waiting ${waitTime}ms before Nominatim request...`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+      }
+      
+      lastNominatimRequest = Date.now();
       
       const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(currentAddress)}&limit=1`;
       
@@ -41,6 +54,20 @@ async function geocodeAddress(address: string): Promise<{ lat: number, lng: numb
           'User-Agent': 'TokTripPlanner/1.0 (contact@toktripplanner.com)'
         }
       });
+
+      // Handle rate limiting (429) with exponential backoff
+      if (response.status === 429) {
+        const backoffTime = Math.min(5000 * Math.pow(2, retryCount), 30000); // Max 30s
+        console.warn(`⚠️ Rate limited (429)! Backing off for ${backoffTime}ms...`);
+        await new Promise(resolve => setTimeout(resolve, backoffTime));
+        
+        if (retryCount < 3) {
+          return geocodeAddress(address, retryCount + 1);
+        } else {
+          console.error(`❌ Max retries reached for rate limiting`);
+          return null;
+        }
+      }
 
       if (!response.ok) {
         console.error(`Nominatim API error: ${response.status} ${response.statusText}`);
@@ -170,6 +197,13 @@ serve(async (req) => {
     // Use Nominatim as PRIMARY (more accurate than Gemini's approximations)
     // Use Gemini coordinates only as fallback
     console.log('Geocoding places for accurate coordinates...');
+    
+    // Add random initial delay (0-3 seconds) to spread out parallel requests
+    // This helps when multiple photos are uploaded simultaneously
+    const initialDelay = Math.floor(Math.random() * 3000);
+    console.log(`⏳ Initial delay: ${initialDelay}ms to spread out parallel requests...`);
+    await new Promise(resolve => setTimeout(resolve, initialDelay));
+    
     const placesWithCoords = [];
     
     for (const placeData of placesFound) {
